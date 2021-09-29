@@ -185,8 +185,8 @@ func (ri *remoteInfo) zero() {
 
 // Recycle is used to recycle the remoteInfo.
 func (ri *remoteInfo) Recycle() {
-	if r, ok := ri.instance.(internal.Reusable); ok {
-		r.Recycle()
+	if v, ok := ri.instance.(internal.Reusable); ok {
+		v.Recycle()
 	}
 	ri.zero()
 	remoteInfoPool.Put(ri)

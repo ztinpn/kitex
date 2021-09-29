@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cloudwego/kitex/internal"
 	"github.com/cloudwego/kitex/internal/client"
 	"github.com/cloudwego/kitex/pkg/discovery"
 	"github.com/cloudwego/kitex/pkg/http"
@@ -51,15 +52,17 @@ func newOptions() interface{} {
 	}
 }
 
-func (co *callOptions) zero() {
+// Recycle zeros the call option and put it to the pool.
+func (co *callOptions) Recycle() {
+	if v, ok := co.configs.(internal.Reusable); ok {
+		v.Recycle()
+	}
+	if v, ok := co.svr.(internal.Reusable); ok {
+		v.Recycle()
+	}
 	co.configs = nil
 	co.svr = nil
 	co.locks.Zero()
-}
-
-// Recycle zeros the call option and put it to the pool.
-func (co *callOptions) Recycle() {
-	co.zero()
 	callOptionsPool.Put(co)
 }
 

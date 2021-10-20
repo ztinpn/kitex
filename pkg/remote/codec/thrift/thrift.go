@@ -69,17 +69,18 @@ func (c thriftCodec) Marshal(ctx context.Context, message remote.Message, out re
 		return nil
 	}
 	// 2. encode thrift
-	tProt := NewBinaryProtocol(out)
+	var tProt BinaryProtocol
+	tProt.trans = out
 	if err := tProt.WriteMessageBegin(methodName, thrift.TMessageType(msgType), seqID); err != nil {
 		return perrors.NewProtocolErrorWithMsg(fmt.Sprintf("thrift marshal, WriteMessageBegin failed: %s", err.Error()))
 	}
 	switch msg := data.(type) {
 	case MessageWriter:
-		if err := msg.Write(tProt); err != nil {
+		if err := msg.Write(&tProt); err != nil {
 			return perrors.NewProtocolErrorWithErrMsg(err, fmt.Sprintf("thrift marshal, Write failed: %s", err.Error()))
 		}
 	case MessageWriterWithContext:
-		if err := msg.Write(ctx, tProt); err != nil {
+		if err := msg.Write(ctx, &tProt); err != nil {
 			return perrors.NewProtocolErrorWithErrMsg(err, fmt.Sprintf("thrift marshal, Write failed: %s", err.Error()))
 		}
 	default:
@@ -88,13 +89,13 @@ func (c thriftCodec) Marshal(ctx context.Context, message remote.Message, out re
 	if err := tProt.WriteMessageEnd(); err != nil {
 		return perrors.NewProtocolErrorWithMsg(fmt.Sprintf("thrift marshal, WriteMessageEnd failed: %s", err.Error()))
 	}
-	tProt.Recycle()
 	return nil
 }
 
 // Unmarshal implements the remote.PayloadCodec interface.
 func (c thriftCodec) Unmarshal(ctx context.Context, message remote.Message, in remote.ByteBuffer) error {
-	tProt := NewBinaryProtocol(in)
+	var tProt BinaryProtocol
+	tProt.trans = in
 	methodName, msgType, seqID, err := tProt.ReadMessageBegin()
 	if err != nil {
 		return perrors.NewProtocolErrorWithErrMsg(err, fmt.Sprintf("thrift unmarshal, ReadMessageBegin failed: %s", err.Error()))
@@ -105,7 +106,7 @@ func (c thriftCodec) Unmarshal(ctx context.Context, message remote.Message, in r
 	// exception message
 	if message.MessageType() == remote.Exception {
 		exception := thrift.NewTApplicationException(thrift.UNKNOWN_APPLICATION_EXCEPTION, "")
-		if err := exception.Read(tProt); err != nil {
+		if err := exception.Read(&tProt); err != nil {
 			return perrors.NewProtocolErrorWithErrMsg(err, fmt.Sprintf("thrift unmarshal Exception failed: %s", err.Error()))
 		}
 		if err := tProt.ReadMessageEnd(); err != nil {
@@ -144,23 +145,21 @@ func (c thriftCodec) Unmarshal(ctx context.Context, message remote.Message, in r
 		if err != nil {
 			return remote.NewTransError(remote.ProtocolError, err)
 		}
-		tProt.Recycle()
 		return err
 	}
 	switch t := data.(type) {
 	case MessageReader:
-		if err = t.Read(tProt); err != nil {
+		if err = t.Read(&tProt); err != nil {
 			return remote.NewTransError(remote.ProtocolError, err)
 		}
 	case MessageReaderWithMethodWithContext:
-		if err = t.Read(ctx, methodName, tProt); err != nil {
+		if err = t.Read(ctx, methodName, &tProt); err != nil {
 			return remote.NewTransError(remote.ProtocolError, err)
 		}
 	default:
 		return remote.NewTransErrorWithMsg(remote.InvalidProtocol, "decode failed, codec msg type not match with thriftCodec")
 	}
 	tProt.ReadMessageEnd()
-	tProt.Recycle()
 	return err
 }
 

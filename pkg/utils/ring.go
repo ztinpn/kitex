@@ -18,28 +18,20 @@ package utils
 
 import (
 	"errors"
-	"runtime"
 	"sync/atomic"
+	"unsafe"
+
+	"github.com/bytedance/gopkg/collection/lscq"
 )
 
 // ErrRingFull means the ring is full.
 var ErrRingFull = errors.New("ring is full")
 
-const (
-	patch = 1 << 32
-	lower = int64(0xFFFFFFFF)
-)
-
-type node struct {
-	data interface{}
-	next int64
-}
-
 // Ring implements a fixed size ring buffer to manage data
 type Ring struct {
-	objs []node
-	free int64 // upper 32 bits for version stamp, lower bits for index
-	used int64 // upper 32 bits for version stamp, lower bits for index
+	queue *lscq.PointerQueue
+	quota int32
+	limit int32
 }
 
 // NewRing creates a ringbuffer with fixed size.
@@ -51,63 +43,29 @@ func NewRing(size int) *Ring {
 	}
 
 	r := &Ring{
-		objs: make([]node, size, size),
-		free: int64(size - 1),
-		used: -1,
-	}
-
-	for i := 0; i < size; i++ {
-		r.objs[i].next = int64(i - 1)
+		queue: lscq.NewPointer(),
+		quota: 0,
+		limit: int32(size),
 	}
 	return r
 }
 
 // Push appends item to the ring.
-func (r *Ring) Push(obj interface{}) error {
-	visit := func(n *node) { n.data = obj }
-	if r.move(&r.free, &r.used, visit) {
-		return nil
+func (r *Ring) Push(obj unsafe.Pointer) error {
+	if atomic.AddInt32(&r.quota, 1) < r.limit {
+		r.queue.Enqueue(unsafe.Pointer(obj))
+	} else {
+		atomic.AddInt32(&r.quota, -1)
 	}
 	return ErrRingFull
 }
 
 // Pop returns the last item and removes it from the ring.
 func (r *Ring) Pop() (result interface{}) {
-	visit := func(n *node) { result = n.data; n.data = nil }
-	if r.move(&r.used, &r.free, visit) {
-		return
+	var ok bool
+	result, ok = r.queue.Dequeue()
+	if ok && result != nil {
+		atomic.AddInt32(&r.quota, -1)
 	}
-	return nil
-}
-
-func (r *Ring) move(src, dst *int64, visit func(n *node)) bool {
-	for {
-		idx := atomic.LoadInt64(src)
-		cur := int32(idx & lower)
-		if cur == -1 {
-			break
-		}
-		obj := &r.objs[cur]
-		nxt := atomic.LoadInt64(&obj.next)
-
-		tmp := ((idx &^ lower) | (nxt & lower)) + patch
-		// cut the link and seize the node
-		if atomic.CompareAndSwapInt64(src, idx, tmp) {
-			visit(obj)
-
-			// add to the other link
-			for {
-				idx = atomic.LoadInt64(dst)
-				atomic.StoreInt64(&obj.next, idx&lower)
-				tmp = ((idx &^ lower) | int64(cur)) + patch
-
-				if atomic.CompareAndSwapInt64(dst, idx, tmp) {
-					return true
-				}
-				runtime.Gosched()
-			}
-		}
-		runtime.Gosched()
-	}
-	return false
+	return
 }

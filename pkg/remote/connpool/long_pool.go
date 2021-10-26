@@ -22,6 +22,7 @@ import (
 	"net"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/cloudwego/kitex/pkg/connpool"
 	"github.com/cloudwego/kitex/pkg/remote"
@@ -131,7 +132,7 @@ func (p *peer) put(c *longConn) error {
 		return c.Conn.Close()
 	}
 	c.deadline = time.Now().Add(p.maxIdleTimeout)
-	err := p.ring.Push(c)
+	err := p.ring.Push(unsafe.Pointer(c))
 	if err != nil {
 		p.globalIdle.Dec()
 		return c.Conn.Close()

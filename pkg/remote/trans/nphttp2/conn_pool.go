@@ -44,7 +44,7 @@ type connPool struct {
 var _ remote.LongConnPool = (*connPool)(nil)
 
 // Get pick or generate a net.Conn and return
-func (p *connPool) Get(ctx context.Context, network, address string, opt *remote.ConnOption) (net.Conn, error) {
+func (p *connPool) Get(ctx context.Context, network, address string, opt remote.ConnOption) (net.Conn, error) {
 	v, ok := p.conns.Load(address)
 	if ok {
 		tr := v.(grpc.ClientTransport)

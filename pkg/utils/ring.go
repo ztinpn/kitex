@@ -19,73 +19,93 @@ package utils
 import (
 	"errors"
 	"runtime"
-
-	goid "github.com/choleraehyq/pid"
+	"sync/atomic"
 )
 
 // ErrRingFull means the ring is full.
 var ErrRingFull = errors.New("ring is full")
+
+const (
+	patch = 1 << 32
+	lower = int64(0xFFFFFFFF)
+)
+
+type node struct {
+	data interface{}
+	next int64
+}
+
+// Ring implements a fixed size ring buffer to manage data
+type Ring struct {
+	objs []node
+	free int64 // upper 32 bits for version stamp, lower bits for index
+	used int64 // upper 32 bits for version stamp, lower bits for index
+}
 
 // NewRing creates a ringbuffer with fixed size.
 func NewRing(size int) *Ring {
 	if size <= 0 {
 		panic("new ring with size <=0")
 	}
-	r := &Ring{}
 
-	// check len(rings):
-	// 1. len = P/4
-	// 2. len <= size
-	numP := runtime.GOMAXPROCS(0)
-	r.length = (numP + 3) / 4
-	if r.length > size {
-		r.length = size
+	r := &Ring{
+		objs: make([]node, size),
+		free: int64(size - 1),
+		used: -1,
 	}
 
-	// make rings
-	per := size / r.length
-	r.rings = make([]*ring, r.length)
-	for i := 0; i < r.length-1; i++ {
-		r.rings[i] = newRing(per)
+	for i := 0; i < size; i++ {
+		r.objs[i].next = int64(i - 1)
 	}
-	r.rings[r.length-1] = newRing(size - per*(r.length-1))
 	return r
-}
-
-// Ring implements a fixed size hash list to manage data
-type Ring struct {
-	length int
-	rings  []*ring
 }
 
 // Push appends item to the ring.
 func (r *Ring) Push(obj interface{}) error {
-	if r.length == 1 {
-		return r.rings[0].Push(obj)
-	}
-
-	idx := goid.GetPid() % r.length
-	for i := 0; i < r.length; i, idx = i+1, (idx+1)%r.length {
-		err := r.rings[idx].Push(obj)
-		if err == nil {
-			return nil
-		}
+	visit := func(n *node) { n.data = obj }
+	if r.move(&r.free, &r.used, visit) {
+		return nil
 	}
 	return ErrRingFull
 }
 
 // Pop returns the last item and removes it from the ring.
-func (r *Ring) Pop() interface{} {
-	if r.length == 1 {
-		return r.rings[0].Pop()
-	}
-
-	idx := goid.GetPid() % r.length
-	for i := 0; i < r.length; i, idx = i+1, (idx+1)%r.length {
-		obj := r.rings[idx].Pop()
-		if obj != nil {
-			return obj
-		}
+func (r *Ring) Pop() (result interface{}) {
+	visit := func(n *node) { result = n.data; n.data = nil }
+	if r.move(&r.used, &r.free, visit) {
+		return
 	}
 	return nil
+}
+
+func (r *Ring) move(src, dst *int64, visit func(n *node)) bool {
+	for {
+		idx := atomic.LoadInt64(src)
+		cur := int32(idx & lower)
+		if cur == -1 {
+			break
+		}
+		obj := &r.objs[cur]
+		nxt := atomic.LoadInt64(&obj.next)
+
+		tmp := ((idx &^ lower) | (nxt & lower)) + patch
+		// cut the link and seize the node
+		if atomic.CompareAndSwapInt64(src, idx, tmp) {
+			visit(obj)
+
+			// add to the other link
+			for {
+				idx = atomic.LoadInt64(dst)
+				atomic.StoreInt64(&obj.next, idx&lower)
+				tmp = ((idx &^ lower) | int64(cur)) + patch
+
+				if atomic.CompareAndSwapInt64(dst, idx, tmp) {
+					return true
+				}
+				runtime.Gosched()
+			}
+		}
+		runtime.Gosched()
+	}
+	return false
 }

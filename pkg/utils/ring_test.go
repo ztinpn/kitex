@@ -168,7 +168,7 @@ func TestRing_Race(t *testing.T) {
 						tmp += c.result()
 						c.count()
 						err := r.Push(c)
-						test.Assert(t, err == nil, r.length, size, runtime.GOMAXPROCS(0))
+						test.Assert(t, err == nil)
 						break
 					}
 					runtime.Gosched()

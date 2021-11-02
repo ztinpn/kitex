@@ -17,6 +17,7 @@
 package utils
 
 import (
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -139,4 +140,49 @@ func BenchmarkRing_Parallel(b *testing.B) {
 			r.Push(obj)
 		}
 	})
+}
+
+type counter struct{ value int }
+
+func (c *counter) count()      { c.value++ }
+func (c *counter) result() int { return c.value }
+
+func TestRing_Race(t *testing.T) {
+	size, p, times := 10, 100, 10000
+	r := NewRing(size)
+	var wg sync.WaitGroup
+
+	for i := 0; i < size; i++ {
+		err := r.Push(new(counter))
+		test.Assert(t, err == nil, i, err)
+	}
+	for i := 0; i < p; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tmp := 0
+			for j := 0; j < times; j++ {
+				for {
+					c, ok := r.Pop().(*counter)
+					if ok && c != nil {
+						tmp += c.result()
+						c.count()
+						err := r.Push(c)
+						test.Assert(t, err == nil, r.length, size, runtime.GOMAXPROCS(0))
+						break
+					}
+					runtime.Gosched()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	sum := 0
+	for i := 0; i < size; i++ {
+		c, ok := r.Pop().(*counter)
+		test.Assert(t, ok, i)
+		sum += c.result()
+	}
+	test.Assert(t, sum == p*times, sum)
 }

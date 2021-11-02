@@ -20,7 +20,7 @@ import (
 	"errors"
 	"runtime"
 
-	"github.com/choleraehyq/pid"
+	goid "github.com/choleraehyq/pid"
 )
 
 // ErrRingFull means the ring is full.
@@ -88,14 +88,4 @@ func (r *Ring) Pop() interface{} {
 		}
 	}
 	return nil
-}
-
-// Dump dumps the data in the ring.
-func (r *Ring) Dump() interface{} {
-	m := &ringDump{}
-	idx := goid.GetPid() % r.length
-	for i := 0; i < r.length; i, idx = i+1, (idx+1)%r.length {
-		r.rings[idx].Dump(m)
-	}
-	return m
 }
